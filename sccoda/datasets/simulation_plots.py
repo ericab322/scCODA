@@ -12,6 +12,9 @@ import numpy as np
 
 import sccoda.datasets as scd
 
+import time
+import tracemalloc
+
 from sccoda.model.scCODA_model import EricaModel
 
 # Functions
@@ -201,10 +204,31 @@ def run_one_file(csv_path: str, out_root: str,
         covariate_names=covariate_names,
         formula=formula
     )
+    # base_res = base_model.sample_hmc(**hmc_kwargs)
+    tracemalloc.start()                      # Start memory tracking
+    start_time = time.perf_counter()         # Start timer
+
     base_res = base_model.sample_hmc(**hmc_kwargs)
 
+    end_time = time.perf_counter()           # End timer
+    current, peak = tracemalloc.get_traced_memory()  # Get memory usage in bytes
+    tracemalloc.stop()
+    elapsed_time = end_time - start_time
+    current_memory = current / 10**6
+    peak_memory = peak / 10**6
+    profiling_dict_default = {
+        "sample_size": data_matrix.shape[0],
+        "parameter_changed": "default",
+        "parameter_value": "default", 
+        "elapsed_time_seconds": elapsed_time,
+        "current_memory_MB": current_memory,
+        "peak_memory_MB": peak_memory
+    }
     df_default = summarize(base_res, prior_label="default", reference=ref_index)
     df_default.to_csv(os.path.join(out_dir, "summary_default.csv"), index=False)
+    profiling_dict_default_df = pd.DataFrame.from_dict(profiling_dict_default)
+    # profiling_dict_default_df.to_csv(os.path.join(out_dir, "profiling_default.csv"), index=False)
+
     
     # sweep over priors
     sweep_specs = {
@@ -240,8 +264,24 @@ def run_one_file(csv_path: str, out_root: str,
             formula=formula,
             **priors_low
         )
+        tracemalloc.start()                      # Start memory tracking
+        start_time = time.perf_counter()         # Start timer
         res_low = model_low.sample_hmc(**hmc_kwargs)
-
+        end_time = time.perf_counter()           # End timer
+        current, peak = tracemalloc.get_traced_memory()  # Get memory usage in bytes
+        tracemalloc.stop()
+        elapsed_time = end_time - start_time
+        current_memory = current / 10**6
+        peak_memory = peak / 10**6
+        profiling_dict_low = {
+            "sample_size": data_matrix.shape[0],
+            "parameter_changed": param,
+            "parameter_value": lvls["low"], 
+            "elapsed_time_seconds": elapsed_time,
+            "current_memory_MB": current_memory,
+            "peak_memory_MB": peak_memory
+        }
+        profiling_dict_low_df = pd.DataFrame.from_dict(profiling_dict_low)
         # high
         priors_high = {**default_priors, param: lvls["high"]}
         model_high = EricaModel(
@@ -253,13 +293,31 @@ def run_one_file(csv_path: str, out_root: str,
             formula=formula,
             **priors_high
         )
+        tracemalloc.start()                      # Start memory tracking
+        start_time = time.perf_counter()         # Start timer
         res_high = model_high.sample_hmc(**hmc_kwargs)
-        
+        end_time = time.perf_counter()           # End timer
+        current, peak = tracemalloc.get_traced_memory()  # Get memory usage in bytes
+        tracemalloc.stop()
+        elapsed_time = end_time - start_time
+        current_memory = current / 10**6
+        peak_memory = peak / 10**6
+        profiling_dict_high = {
+            "sample_size": data_matrix.shape[0],
+            "parameter_changed": param,
+            "parameter_value": lvls["high"], 
+            "elapsed_time_seconds": elapsed_time,
+            "current_memory_MB": current_memory,
+            "peak_memory_MB": peak_memory
+        }
+        profiling_dict_high_df = pd.DataFrame.from_dict(profiling_dict_high)
         # summarize and plot
         df_low  = summarize(res_low,  prior_label="low",  reference=ref_index)
         df_high = summarize(res_high, prior_label="high", reference=ref_index)
         df_all  = pd.concat([df_default, df_low, df_high], ignore_index=True)
+        profiling_dict_all_df = pd.concat([profiling_dict_default_df, profiling_dict_low_df, profiling_dict_high_df], ignore_index=True)
         df_all.to_csv(os.path.join(pdir, f"summary_{param}.csv"), index=False)
+        profiling_dict_all_df.to_csv(os.path.join(pdir, f"profiling_{param}.csv"), index=False)
 
         fig, _ = plot_grid(df_all, param_name=param)
         fig.savefig(os.path.join(pdir, f"{param}.png"), dpi=200, bbox_inches="tight")
@@ -279,3 +337,23 @@ if __name__ == "__main__":
         csv_path=args.file,
         out_root=args.out
     )
+
+    # parameter_name , Mean, STD,
+    # beta_00
+    # beta_01
+
+# plt.figure(figsize=(10,4))
+# plt.imshow(beta_full, aspect="auto", cmap="bwr", vmin=-1, vmax=1)
+# plt.colorbar(label="Posterior mean effects")
+# plt.xlabel("Dirichlet categories")
+# plt.ylabel("Covariates")
+# plt.title("Posterior mean of beta coefficients (sparse)")
+# plt.show()
+
+# plt.figure(figsize=(10,4))
+# plt.imshow(true_beta, aspect="auto", cmap="bwr", vmin=-1, vmax=1)
+# plt.colorbar(label="True beta")
+# plt.xlabel("Dirichlet categories")
+# plt.ylabel("Covariates")
+# plt.title("True beta coefficients (sparse)")
+# plt.show()
