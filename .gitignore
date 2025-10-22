@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+sccoda/datasets/results/*
+
 # C extensions
 *.so
 

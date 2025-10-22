@@ -1,6 +1,8 @@
 import tensorflow as tf
 import tensorflow_probability as tfp
 import pandas as pd
+import patsy as pt
+import numpy as np
 
 tfd = tfp.distributions
 
@@ -8,7 +10,7 @@ tfd = tfp.distributions
 # 1. Simulation parameters
 # -----------------------------
 tf.random.set_seed(0)
-N, P, K = 200, 15, 5  # samples, covariates, categories        
+N, P, K = 20000, 15, 5  # samples, covariates, categories        
 n_counts = tf.random.uniform((N,), minval=50, maxval=200, dtype=tf.int32) # number of trials per observation (varies per observation). Alternatively, use a fixed number like n_counts = 100
 n_counts = tf.cast(n_counts, tf.float32) #
 
@@ -21,8 +23,9 @@ X_cont = tf.random.normal((N, P - 5))
 
 # Categorical covariates (3 categorical columns, each with 3 levels)
 X_cat = tf.random.uniform((N, 3), minval=0, maxval=3, dtype=tf.int32) + 1
-X_cat_df = pd.get_dummies(pd.DataFrame(X_cat.numpy()))
-X_cat_tf = tf.convert_to_tensor(X_cat_df.values, dtype=tf.float32)
+X_cat_df = pd.DataFrame(X_cat.numpy(), columns=["cat0", "cat1", "cat2"])
+X_cat_matrix = pt.dmatrix("C(cat0) + C(cat1) + C(cat2) - 1", data=X_cat_df)
+X_cat_tf = tf.convert_to_tensor(X_cat_matrix, dtype=tf.float32)
 
 # Binary covariates
 X_bin = tf.random.uniform((N, 2), minval=0, maxval=2, dtype=tf.int32) + 1
@@ -30,6 +33,8 @@ X_bin = tf.cast(X_bin, tf.float32)
 
 # Combine
 X = tf.concat([X_cont, X_cat_tf, X_bin], axis=1)
+# mistake bc one-hot encoding increases number of columns
+P = X.shape[1]
 assert X.shape == (N, P)
 
 # -----------------------------
@@ -69,9 +74,28 @@ print("X shape:", X.shape)
 print("alpha_true shape:", alpha_true.shape)
 print("y shape:", y.shape)
 
-
+# run different ns for tau_temperature, then other parameters
 # -----------------------------
 # 8. Save simulated data to scCODA input format
 # -----------------------------
+donor_id = [f"S{i:03d}" for i in range(1, N + 1)]
+cell_types = [f"CT{j+1}" for j in range(K)]
 
-# Do here!
+cont_names = [f"x_cont{i+1}" for i in range(X_cont.shape[1])]
+cat_names = list(X_cat_matrix.design_info.column_names)
+bin_names = [f"x_bin{i+1}" for i in range(X_bin.shape[1])]
+
+covariates_df = pd.DataFrame(
+    np.concatenate([
+        X_cont.numpy(),          # (N, 10)
+        X_cat_tf.numpy(),        # (N, 9)
+        X_bin.numpy()            # (N, 2)
+    ], axis=1),
+    columns=cont_names + cat_names + bin_names
+)
+counts_df = pd.DataFrame(y.numpy().astype(int), columns=cell_types)
+final_df = pd.concat([pd.DataFrame({'donor_id': donor_id}), covariates_df, counts_df], axis=1)
+
+out_csv = f"scCODA_simulated_n={N}.csv"
+final_df.to_csv(out_csv, index=False)
+print(f"Saved scCODA CSV to: {out_csv}")
