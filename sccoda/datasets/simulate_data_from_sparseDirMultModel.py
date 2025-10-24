@@ -65,6 +65,19 @@ def main(args):
     true_beta[-1, :-1].assign(tf.random.normal((K - 1,)))
     true_beta[-3, :-1].assign(tf.random.normal((K - 1,)))
     true_beta = tf.convert_to_tensor(true_beta)
+    
+    # Save true_beta for reference
+    cell_types = [f"CT{j+1}" for j in range(K)]
+    cont_names = [f"x_cont{i+1}" for i in range(X_cont.shape[1])]
+    cat_names = list(X_cat_matrix.design_info.column_names)
+    bin_names = [f"x_bin{i+1}" for i in range(X_bin.shape[1])]
+    covariate_names = cont_names + cat_names + bin_names
+
+    true_beta_np = true_beta.numpy()
+    true_beta_df = pd.DataFrame(true_beta_np, index=covariate_names, columns=cell_types)
+
+    out_base = f"{save_outputs_base}/scCODA_simulated_N={N}_K={K}_P={P}_SEED={SEED}"
+    true_beta_df.to_csv(out_base + "_true_beta.csv", index=True)
 
     # -----------------------------
     # 4. Precision parameter

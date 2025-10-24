@@ -141,6 +141,25 @@ def plot_grid(df, param_name=None):
     plt.tight_layout()
     return fig, axes
 
+def save_inferred_betas(res, label):
+    beta_da = res.posterior["beta"]  
+    reduce_dims = [d for d in beta_da.dims if d in ("chain", "draw")]
+
+    beta_mean = beta_da.mean(dim=reduce_dims)
+    beta_sd   = beta_da.std(dim=reduce_dims)
+
+    covariate_names = list(beta_mean.coords["covariate"].values)
+    cell_types = list(beta_mean.coords["cell_type"].values)
+    
+    data_dict = {}
+    for j, ct in enumerate(cell_types):
+        data_dict[f"{ct}_mean"] = np.asarray(beta_mean)[:, j]
+        data_dict[f"{ct}_sd"]   = np.asarray(beta_sd)[:, j]
+
+    beta_df = pd.DataFrame(data_dict, index=covariate_names)
+    beta_df.insert(0, "prior", label)
+    return beta_df
+
 def select_reference_cell_type(data: pd.DataFrame, threshold: float = 0.05):
     columns = data.columns.tolist()
     cell_types = [col for col in columns if col.startswith("CT")]
@@ -224,9 +243,10 @@ def run_one_file(csv_path: str, out_root: str,
         "current_memory_MB": current_memory,
         "peak_memory_MB": peak_memory
     }
+    default_betas = save_inferred_betas(base_res, "default")
     df_default = summarize(base_res, prior_label="default", reference=ref_index)
     df_default.to_csv(os.path.join(out_dir, "summary_default.csv"), index=False)
-    profiling_dict_default_df = pd.DataFrame.from_dict(profiling_dict_default)
+    profiling_dict_default_df = pd.DataFrame.from_dict([profiling_dict_default])
     # profiling_dict_default_df.to_csv(os.path.join(out_dir, "profiling_default.csv"), index=False)
 
     
@@ -281,7 +301,9 @@ def run_one_file(csv_path: str, out_root: str,
             "current_memory_MB": current_memory,
             "peak_memory_MB": peak_memory
         }
-        profiling_dict_low_df = pd.DataFrame.from_dict(profiling_dict_low)
+        profiling_dict_low_df = pd.DataFrame.from_dict([profiling_dict_low])
+        low_betas = save_inferred_betas(res_low, "low")
+        
         # high
         priors_high = {**default_priors, param: lvls["high"]}
         model_high = EricaModel(
@@ -310,8 +332,14 @@ def run_one_file(csv_path: str, out_root: str,
             "current_memory_MB": current_memory,
             "peak_memory_MB": peak_memory
         }
-        profiling_dict_high_df = pd.DataFrame.from_dict(profiling_dict_high)
+        profiling_dict_high_df = pd.DataFrame.from_dict([profiling_dict_high])
+        high_betas = save_inferred_betas(res_high, "high")
+        
         # summarize and plot
+        df_all_beta = pd.concat([default_betas, low_betas, high_betas], ignore_index=False)
+        df_all_beta.index.name = "covariate"
+        df_all_beta.to_csv(os.path.join(pdir, f"{param}_betas.csv"), index=True)
+        
         df_low  = summarize(res_low,  prior_label="low",  reference=ref_index)
         df_high = summarize(res_high, prior_label="high", reference=ref_index)
         df_all  = pd.concat([df_default, df_low, df_high], ignore_index=True)
