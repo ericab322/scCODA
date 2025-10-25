@@ -141,24 +141,41 @@ def plot_grid(df, param_name=None):
     plt.tight_layout()
     return fig, axes
 
-def save_inferred_betas(res, label):
-    beta_da = res.posterior["beta"]  
-    reduce_dims = [d for d in beta_da.dims if d in ("chain", "draw")]
+def save_inferred_values(res, prior_label="default"):
+    b_raw_da = res.posterior["b_raw"]
+    tau_da   = res.posterior["ind"] 
+    reduce_dims = [d for d in b_raw_da.dims if d in ("chain", "draw")]
 
-    beta_mean = beta_da.mean(dim=reduce_dims)
-    beta_sd   = beta_da.std(dim=reduce_dims)
+    b_raw_mean = b_raw_da.mean(dim=reduce_dims)
+    b_raw_sd   = b_raw_da.std(dim=reduce_dims)
+    
+    tau_mean= tau_da.mean(dim=reduce_dims)
+    tau_sd  = tau_da.std(dim=reduce_dims)
 
-    covariate_names = list(beta_mean.coords["covariate"].values)
-    cell_types = list(beta_mean.coords["cell_type"].values)
+    covariates = list(b_raw_mean.coords["covariate"].values)
+    cell_types = list(b_raw_mean.coords["cell_type_nb"].values)
     
     data_dict = {}
     for j, ct in enumerate(cell_types):
-        data_dict[f"{ct}_mean"] = np.asarray(beta_mean)[:, j]
-        data_dict[f"{ct}_sd"]   = np.asarray(beta_sd)[:, j]
+        data_dict[f"{ct}_braw_mean"] = np.asarray(b_raw_mean)[:, j]
+        data_dict[f"{ct}_braw_sd"]   = np.asarray(b_raw_sd)[:, j]
+        data_dict[f"{ct}_tau_mean"]  = np.asarray(tau_mean)[:, j]
+        data_dict[f"{ct}_tau_sd"]    = np.asarray(tau_sd)[:, j]
 
-    beta_df = pd.DataFrame(data_dict, index=covariate_names)
-    beta_df.insert(0, "prior", label)
-    return beta_df
+    def build_df(mean_da, sd_da, label):
+        data_dict = {}
+        for j, ct in enumerate(cell_types):
+            data_dict[f"{ct}_mean"] = np.asarray(mean_da)[:, j]
+            data_dict[f"{ct}_sd"]   = np.asarray(sd_da)[:, j]
+        df = pd.DataFrame(data_dict, index=covariates).reset_index()
+        df.rename(columns={"index": "covariate"}, inplace=True)
+        df.insert(1, "prior", label)
+        return df
+
+    braw_df = build_df(b_raw_mean, b_raw_sd, prior_label)
+    tau_df  = build_df(tau_mean, tau_sd, prior_label)
+
+    return braw_df, tau_df
 
 def select_reference_cell_type(data: pd.DataFrame, threshold: float = 0.05):
     columns = data.columns.tolist()
@@ -199,8 +216,9 @@ def run_one_file(csv_path: str, out_root: str,
     columns = data.columns.tolist()
     cell_types = [c for c in columns if c.startswith("CT")]
     covariates = [c for c in columns if c not in cell_types]
-    ref_index, ref_cell_type = select_reference_cell_type(data, threshold=0.05)
-    
+    # ref_index, ref_cell_type = select_reference_cell_type(data, threshold=0.05)
+    ref_cell_type = "CT5" # pre-selected based on knowledge of simulation
+    ref_index = cell_types.index(ref_cell_type)
     data_matrix = data[cell_types].to_numpy(dtype=float)
     covariate_matrix = data[covariates].to_numpy(dtype=float) if len(covariates) else None
     covariate_names = covariates
@@ -243,7 +261,7 @@ def run_one_file(csv_path: str, out_root: str,
         "current_memory_MB": current_memory,
         "peak_memory_MB": peak_memory
     }
-    default_betas = save_inferred_betas(base_res, "default")
+    default_b_raw, default_tau = save_inferred_values(base_res, "default")
     df_default = summarize(base_res, prior_label="default", reference=ref_index)
     df_default.to_csv(os.path.join(out_dir, "summary_default.csv"), index=False)
     profiling_dict_default_df = pd.DataFrame.from_dict([profiling_dict_default])
@@ -302,7 +320,7 @@ def run_one_file(csv_path: str, out_root: str,
             "peak_memory_MB": peak_memory
         }
         profiling_dict_low_df = pd.DataFrame.from_dict([profiling_dict_low])
-        low_betas = save_inferred_betas(res_low, "low")
+        low_braw, low_tau = save_inferred_values(res_low, "low")
         
         # high
         priors_high = {**default_priors, param: lvls["high"]}
@@ -333,13 +351,16 @@ def run_one_file(csv_path: str, out_root: str,
             "peak_memory_MB": peak_memory
         }
         profiling_dict_high_df = pd.DataFrame.from_dict([profiling_dict_high])
-        high_betas = save_inferred_betas(res_high, "high")
+        high_braw, high_tau = save_inferred_values(res_high, "high")
         
         # summarize and plot
-        df_all_beta = pd.concat([default_betas, low_betas, high_betas], ignore_index=False)
-        df_all_beta.index.name = "covariate"
-        df_all_beta.to_csv(os.path.join(pdir, f"{param}_betas.csv"), index=True)
-        
+        df_all_braw = pd.concat([default_b_raw, low_braw, high_braw], ignore_index=False)
+        df_all_braw.index.name = "covariate"
+        df_all_braw.to_csv(os.path.join(pdir, f"{param}_braw.csv"), index=True)
+        df_all_tau = pd.concat([default_tau, low_tau, high_tau], ignore_index=False)
+        df_all_tau.index.name = "covariate"
+        df_all_tau.to_csv(os.path.join(pdir, f"{param}_tau.csv"), index=True)
+
         df_low  = summarize(res_low,  prior_label="low",  reference=ref_index)
         df_high = summarize(res_high, prior_label="high", reference=ref_index)
         df_all  = pd.concat([df_default, df_low, df_high], ignore_index=True)
