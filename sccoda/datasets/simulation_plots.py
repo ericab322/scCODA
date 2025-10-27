@@ -204,8 +204,8 @@ def run_one_file(csv_path: str, out_root: str,
                  num_results=5000, num_burnin=1000, step_size=0.01, num_leapfrog_steps=20):
     
     base = os.path.basename(csv_path)
-    m = re.search(r"n=(\d+)", base)
-    n_tag = f"n={m.group(1)}" if m else "n=unknown"
+    m = re.search(r"N=(\d+)", base)
+    n_tag = f"N={m.group(1)}" if m else "N=unknown"
     out_dir = os.path.join(out_root, n_tag)
     os.makedirs(out_dir, exist_ok=True)
     
@@ -377,8 +377,8 @@ def run_one_file(csv_path: str, out_root: str,
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--file", required=True, help="Path to simulated CSV (e.g., datasets/scCODA_simulated_n=2.csv)")
-    ap.add_argument("--out", default="./results", help="Output directory for results")
+    ap.add_argument("--file", required=True)
+    ap.add_argument("--out", default="./results")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)

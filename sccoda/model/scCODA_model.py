@@ -1043,3 +1043,197 @@ class EricaModel(CompositionalModel):
         y_mean = concentration / np.sum(concentration, axis=1, keepdims=True) * self.n_total.numpy()[:, np.newaxis]
 
         return y_mean
+
+class NewModel(CompositionalModel):
+    """
+    New Model
+    s_km ~ Beta(1,1)
+    tau_m ~ HalfCauchy(1)
+    gamma_{m,k} ~ HalfNormal(1)
+    b_raw_{m,k} ~ Normal(0, tau_m * gamma_{m,k})
+    beta_{m,k} = s_km * b_raw_{m,k} + 0.01 * (1 - s_km) * b_raw_{m,k}
+    alpha_k ~ Normal(0, 1)
+    log(phi) = alpha + x beta
+    r ~ Dirichlet(phi)
+    """
+
+    def __init__(
+            self,
+            reference_cell_type: int,
+            *args,
+            **kwargs):
+        """
+        Constructor of model class. Defines model structure, log-probability function, parameter names,
+        and MCMC starting values.
+
+        Parameters
+        ----------
+        reference_cell_type
+            Index of reference cell type (column in count data matrix)
+        args
+            arguments passed to top-level class
+        kwargs
+            arguments passed to top-level class
+        """
+
+        super(self.__class__, self).__init__(*args, **kwargs)
+
+        self.reference_cell_type = reference_cell_type
+        dtype = tf.float64
+
+        # All parameters that are returned for analysis
+        self.param_names = ["s", "tau", "gamma", "b_raw",
+                            "beta", "alpha", "concentration", "prediction"]
+
+        alpha_size = [self.K]
+        beta_size = [self.D, self.K]
+        sigma_size = [1, 1]
+        beta_nobl_size = [self.D, self.K-1]
+
+        Root = tfd.JointDistributionCoroutine.Root
+
+        def model():
+            tau = yield Root(tfd.Independent(
+                tfd.HalfCauchy(tf.zeros(sigma_size, dtype=dtype),
+                               tf.ones(sigma_size, dtype=dtype),
+                               name="tau"),
+                reinterpreted_batch_ndims=2))
+
+            s = yield Root(tfd.Independent(
+                tfd.Beta(
+                    concentration1=tf.ones(beta_nobl_size, dtype=dtype),
+                    concentration0=tf.ones(beta_nobl_size, dtype=dtype),
+                    name="s"),
+                reinterpreted_batch_ndims=2))
+
+            gamma = yield Root(tfd.Independent(
+                tfd.HalfNormal(
+                    scale=tf.ones(shape=beta_nobl_size, dtype=dtype),
+                    name="gamma"),
+                reinterpreted_batch_ndims=2))
+            
+            b_raw_scale = tau * gamma
+            
+            b_raw = yield Root(tfd.Independent(
+                tfd.Normal(
+                    loc=tf.zeros(beta_nobl_size, dtype=dtype),
+                    scale=b_raw_scale,
+                    name="b_raw"),
+                reinterpreted_batch_ndims=2)
+            )
+
+            beta = b_raw * s + 0.01 *(1-s) * b_raw
+
+            # Include slope 0 for reference cell type
+            beta = tf.concat(axis=1, values=[beta[:, :reference_cell_type],
+                                             tf.zeros(shape=[self.D, 1], dtype=dtype),
+                                             beta[:, reference_cell_type:]])
+
+            alpha = yield Root(tfd.Independent(
+                tfd.Normal(
+                    loc=tf.zeros(alpha_size, dtype=dtype),
+                    scale=tf.ones(alpha_size, dtype=dtype),
+                    name="alpha"),
+                reinterpreted_batch_ndims=1))
+
+            concentrations = tf.exp(alpha + tf.matmul(self.x, beta))
+
+            # Cell count probalities via Dirichlet
+            r = yield Root(tfd.Independent(
+                tfd.Dirichlet(
+                    concentration=concentrations,
+                    name="r"),
+                reinterpreted_batch_ndims=1))
+
+        self.model_struct = tfd.JointDistributionCoroutine(model)
+
+        # Joint posterior distribution
+        @tf.function(experimental_compile=True)
+        def target_log_prob_fn(*argsl):
+            return self.model_struct.log_prob(list(argsl) + [tf.cast(self.y, dtype)])
+
+        self.target_log_prob_fn = target_log_prob_fn
+
+        #### UP TO HERE FOR MODEL CHANGES ####
+        # must initialize accordingly
+        self.init_params = [
+            tf.ones(sigma_size, name="init_tau", dtype=dtype),
+            tf.ones(beta_nobl_size, name="init_s", dtype=dtype) * 0.5,
+            tf.ones(beta_nobl_size, name="init_gamma", dtype=dtype),
+            tf.random.normal(beta_nobl_size, 0, 1, name='init_b_raw', dtype=dtype),
+            tf.random.normal(alpha_size, 0, 1, name='init_alpha', dtype=dtype)
+        ]
+
+        self.constraining_bijectors = [tfb.Identity() for x in range(len(self.init_params))]
+
+    # Calculate predicted cell counts (for analysis purposes)
+    def get_y_hat(
+            self,
+            states_burnin: List[any],
+            num_results: int,
+            num_burnin: int
+    ) -> np.ndarray:
+        """
+        Calculate posterior mode of cell counts (for analysis purposes) and add intermediate parameters
+        that are no priors to MCMC results.
+
+        Parameters
+        ----------
+        states_burnin
+            MCMC chain without burn-in samples
+        num_results
+            Chain length (with burn-in)
+        num_burnin
+            Number of burn-in samples
+
+        Returns
+        -------
+        posterior mode
+
+        y_mean
+            posterior mode of cell counts
+        """
+
+        chain_size_y = [num_results - num_burnin, self.N, self.K]
+        chain_size_beta = [num_results - num_burnin, self.D, self.K]
+        # order for initial parameters correspond
+        alphas = states_burnin[4]
+        alphas_final = alphas.mean(axis=0)
+        
+        b_raw = states_burnin[3]
+        gamma = states_burnin[2]
+        s = states_burnin[1]
+        tau = states_burnin[0]
+
+
+        ind_ = np.exp(ind_raw) / (1 + np.exp(ind_raw))
+
+        b_raw_ = np.einsum("...jk, ...jl->...jk", b_offset, sigma_d)
+
+        beta_temp = np.einsum("..., ...", ind_, b_raw_)
+
+        beta_ = np.zeros(chain_size_beta)
+        for i in range(num_results - num_burnin):
+            beta_[i] = np.concatenate([beta_temp[i, :, :self.reference_cell_type],
+                                       np.zeros(shape=[self.D, 1], dtype=np.float64),
+                                       beta_temp[i, :, self.reference_cell_type:]], axis=1)
+        conc_ = np.exp(np.einsum("jk, ...kl->...jl", self.x, beta_)
+                       + alphas.reshape((num_results - num_burnin, 1, self.K)))
+
+        predictions_ = np.zeros(chain_size_y)
+        for i in range(num_results - num_burnin):
+            pred = tfd.DirichletMultinomial(self.n_total, conc_[i, :, :]).mean().numpy()
+            predictions_[i, :, :] = pred
+
+        betas_final = beta_.mean(axis=0)
+        states_burnin.append(ind_)
+        states_burnin.append(b_raw_)
+        states_burnin.append(beta_)
+        states_burnin.append(conc_)
+        states_burnin.append(predictions_)
+
+        concentration = np.exp(np.matmul(self.x, betas_final) + alphas_final).astype(np.float64)
+
+        y_mean = concentration / np.sum(concentration, axis=1, keepdims=True) * self.n_total.numpy()[:, np.newaxis]
+
+        return y_mean

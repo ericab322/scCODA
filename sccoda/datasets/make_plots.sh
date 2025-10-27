@@ -45,7 +45,9 @@ export PYTHONPATH=/users/ebrown62/scCODA:${PYTHONPATH}
 
 cd "$DATA_DIR"
 SAVE_DIR=$PROJECT_ROOT/datasets/results
-for FILE in scCODA_simulated_n=*.csv; do
-    echo "Running: $FILE"
-    python simulation_plots.py --file "$FILE" --out "$OUT_DIR"
+for FILE in scCODA_simulated_*.csv; do
+    if [[ "$FILE" != *true_beta* ]]; then
+        echo "Running: $FILE"
+        python simulation_plots.py --file "$FILE" --out "$OUT_DIR"
+    fi
 done
