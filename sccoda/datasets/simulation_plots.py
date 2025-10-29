@@ -270,10 +270,10 @@ def run_one_file(csv_path: str, out_root: str,
     
     # sweep over priors
     sweep_specs = {
-        "alpha_loc":        dict(low=0.5,  high=10.0),
+        "alpha_loc":        dict(low=-10.0,  high=10.0),
         "alpha_sd":         dict(low=0.5,  high=10.0),
         "sigma_hc_scale":   dict(low=0.25, high=5.0),
-        "gamma_loc":        dict(low=0.25, high=5.0),
+        "gamma_loc":        dict(low=-10.0, high=10.0),
         "gamma_sd":         dict(low=0.25, high=5.0),
         "tau_temperature":  dict(low=1.0,  high=100.0),
     }

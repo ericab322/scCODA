@@ -1,11 +1,12 @@
 import os
+from matplotlib.colors import ListedColormap
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 # input
 TRUE_BETA_PATH = "/users/ebrown62/scCODA/sccoda/datasets/scCODA_simulated_N=2_K=5_P=16_SEED=0_true_beta.csv"
-RESULTS_DIR = "/users/ebrown62/scCODA/sccoda/datasets/results/n=unknown"
+RESULTS_DIR = "/users/ebrown62/scCODA/sccoda/datasets/results/N=2"
 REF_BASELINE = "CT5"      
 TAU_THRESHOLD = 0.5
 VMIN, VMAX = -1, 1
@@ -70,12 +71,16 @@ for param in param_folders:
         plt.savefig(os.path.join(out_dir, f"{param}_{prior}_effects.png"), dpi=200)
         plt.close()
 
-        # greater than threshold heatmap 
-        tau_mask = tau_mean.where(tau_mean > TAU_THRESHOLD, np.nan)
+        # Binary red/white colormap
+        red_white = ListedColormap(["white", "red"])
+
+        # threshold mask
+        tau_array = tau_mean.to_numpy(dtype=float)
+        binary_mask = (tau_array > TAU_THRESHOLD).astype(int)
+
         plt.figure(figsize=(10, 4))
-        plt.imshow(tau_mask.to_numpy(dtype=float),
-                   aspect="auto", cmap="Reds", vmin=0, vmax=1)
-        plt.colorbar(label=f"τ (only > {TAU_THRESHOLD} shown)")
+        plt.imshow(binary_mask, aspect="auto", cmap=red_white, vmin=0, vmax=1)
+        plt.colorbar(label=f"τ > {TAU_THRESHOLD}", ticks=[0, 1])
         plt.xlabel("Dirichlet categories")
         plt.ylabel("Covariates")
         plt.title(f"{param} ({prior}) — τ > {TAU_THRESHOLD}")
