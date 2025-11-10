@@ -35,7 +35,7 @@ export LD_PRELOAD=/gpfs/runtime/opt/intel/2020.2/mkl/lib/intel64/libmkl_def.so:/
 
 PROJECT_ROOT=/users/ebrown62/scCODA/sccoda
 DATA_DIR=$PROJECT_ROOT/datasets
-OUT_DIR=$PROJECT_ROOT/datasets/results
+OUT_DIR=$PROJECT_ROOT/datasets/results/covariate_scaling
 
 
 #Activate env
@@ -44,8 +44,8 @@ source /users/ebrown62/scCODA/sccoda-py311/bin/activate;
 export PYTHONPATH=/users/ebrown62/scCODA:${PYTHONPATH}
 
 cd "$DATA_DIR"
-SAVE_DIR=$PROJECT_ROOT/datasets/results
-for FILE in scCODA_simulated_*.csv; do
+SAVE_DIR=$PROJECT_ROOT/datasets/results/covariate_scaling
+for FILE in scCODA_simulated_N=200_K=5_P=*_SEED=0.csv; do
     if [[ "$FILE" != *true_beta* ]]; then
         echo "Running: $FILE"
         python simulation_plots.py --file "$FILE" --out "$OUT_DIR"

@@ -204,11 +204,14 @@ def run_one_file(csv_path: str, out_root: str,
                  num_results=5000, num_burnin=1000, step_size=0.01, num_leapfrog_steps=20):
     
     base = os.path.basename(csv_path)
-    m = re.search(r"N=(\d+)", base)
-    n_tag = f"N={m.group(1)}" if m else "N=unknown"
+    m = re.search(r"N=(\d+)_K=(\d+)_P=(\d+)_SEED=(\d+)", base)
+    if m:
+        n_tag = f"N={m.group(1)}_K={m.group(2)}_P={m.group(3)}_SEED={m.group(4)}"
+    else:
+        n_tag = "N=unknown"
+
     out_dir = os.path.join(out_root, n_tag)
     os.makedirs(out_dir, exist_ok=True)
-    
     data = pd.read_csv(csv_path)
     if "donor_id" in data.columns:
         data = data.set_index("donor_id")
