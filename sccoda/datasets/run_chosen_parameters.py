@@ -3,6 +3,11 @@ import importlib
 import warnings
 warnings.filterwarnings("ignore")
 
+import os
+import re
+import argparse
+
+
 import pandas as pd
 import pickle as pkl
 import matplotlib.pyplot as plt
@@ -16,8 +21,6 @@ import time
 import tracemalloc
 
 from sccoda.model.scCODA_model import EricaModel
-
-# Functions
 
 def values(arr):
         mean = arr.mean(axis=(0,1))               
@@ -123,8 +126,7 @@ def plot_grid(df, param_name=None):
                     color=color, alpha=0.2
                 )
 
-            ax.set_xticks(range(len(prior_order)))
-            ax.set_xticklabels(prior_order, rotation=45, ha="right", fontsize=9)
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", fontsize=9)
             ax.tick_params(axis="y", labelsize=8)
             ax.grid(True, linestyle="--", alpha=0.4)
 
@@ -195,217 +197,252 @@ def select_reference_cell_type(data: pd.DataFrame, threshold: float = 0.05):
     ref_cell_type = cell_types[ref_index]
     return ref_index, ref_cell_type
 
-# Main Script
-import os
-import re
-import argparse
-
-def run_one_file(csv_path: str, out_root: str,
-                 num_results=5000, num_burnin=1000, step_size=0.01, num_leapfrog_steps=20):
-    
-    base = os.path.basename(csv_path)
-    m = re.search(r"N=(\d+)_K=(\d+)_P=(\d+)_SEED=(\d+)", base)
-    if m:
-        n_tag = f"N={m.group(1)}_K={m.group(2)}_P={m.group(3)}_SEED={m.group(4)}"
-    else:
-        n_tag = "N=unknown"
-
-    out_dir = os.path.join(out_root, n_tag)
-    os.makedirs(out_dir, exist_ok=True)
-    data = pd.read_csv(csv_path)
-    if "donor_id" in data.columns:
-        data = data.set_index("donor_id")
-    
-    columns = data.columns.tolist()
-    cell_types = [c for c in columns if c.startswith("CT")]
-    covariates = [c for c in columns if c not in cell_types]
-    # ref_index, ref_cell_type = select_reference_cell_type(data, threshold=0.05)
-    ref_cell_type = "CT5" # pre-selected based on knowledge of simulation
-    ref_index = cell_types.index(ref_cell_type)
-    data_matrix = data[cell_types].to_numpy(dtype=float)
-    covariate_matrix = data[covariates].to_numpy(dtype=float) if len(covariates) else None
-    covariate_names = covariates
-    formula = "~ " + " + ".join(covariates) if len(covariates) else "~ 1"
-    
-    # HMC
-    hmc_kwargs = dict(
-        num_results=num_results,
-        num_burnin=num_burnin,
-        step_size=step_size,
-        num_leapfrog_steps=num_leapfrog_steps,
-    )
-
-    # default
-    base_model = EricaModel(
+def run_hmc(
+    data_matrix,
+    covariate_matrix,
+    cell_types,
+    covariate_names,
+    formula,
+    ref_index,
+    priors,
+    hmc_params
+):
+    model = EricaModel(
         reference_cell_type=ref_index,
         data_matrix=data_matrix,
         covariate_matrix=covariate_matrix,
         cell_types=cell_types,
         covariate_names=covariate_names,
-        formula=formula
+        formula=formula,
+        **priors
     )
-    # base_res = base_model.sample_hmc(**hmc_kwargs)
-    tracemalloc.start()                      # Start memory tracking
-    start_time = time.perf_counter()         # Start timer
 
-    base_res = base_model.sample_hmc(**hmc_kwargs)
-
-    end_time = time.perf_counter()           # End timer
-    current, peak = tracemalloc.get_traced_memory()  # Get memory usage in bytes
+    tracemalloc.start()
+    start = time.perf_counter()
+    res = model.sample_hmc(**hmc_params)
+    end = time.perf_counter()
+    cur, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    elapsed_time = end_time - start_time
-    current_memory = current / 10**6
-    peak_memory = peak / 10**6
-    profiling_dict_default = {
-        "sample_size": data_matrix.shape[0],
-        "parameter_changed": "default",
-        "parameter_value": "default", 
-        "elapsed_time_seconds": elapsed_time,
-        "current_memory_MB": current_memory,
-        "peak_memory_MB": peak_memory
-    }
-    default_b_raw, default_tau = save_inferred_values(base_res, "default")
-    df_default = summarize(base_res, prior_label="default", reference=ref_index)
-    df_default.to_csv(os.path.join(out_dir, "summary_default.csv"), index=False)
-    profiling_dict_default_df = pd.DataFrame.from_dict([profiling_dict_default])
-    # profiling_dict_default_df.to_csv(os.path.join(out_dir, "profiling_default.csv"), index=False)
 
-    
-    # sweep over priors
-    sweep_specs = {
-        "alpha_loc":        dict(low=-10.0,  high=10.0),
-        "alpha_sd":         dict(low=0.5,  high=10.0),
-        "sigma_hc_scale":   dict(low=0.25, high=5.0),
-        "gamma_loc":        dict(low=-10.0, high=10.0),
-        "gamma_sd":         dict(low=0.25, high=5.0),
-        "tau_temperature":  dict(low=1.0,  high=100.0),
-    }
-    default_priors = dict(
-        alpha_loc=0.0,
-        alpha_sd=5.0,
-        sigma_hc_scale=1.0,
-        gamma_loc=0.0,
-        gamma_sd=1.0,
-        tau_temperature=50.0,
+    return res, dict(
+        elapsed=end - start,
+        current_MB=cur / 1e6,
+        peak_MB=peak / 1e6
     )
 
-    for param, lvls in sweep_specs.items():
-        print(f"[{n_tag}] Sweeping prior: {param}")
+def run_default_if_needed(
+    out_dir,
+    data_matrix,
+    covariate_matrix,
+    cell_types,
+    covariate_names,
+    formula,
+    ref_index,
+    default_priors,
+    hmc_params,
+    force=False
+):
+    default_path = os.path.join(out_dir, "summary_default.csv")
+
+    if os.path.exists(default_path) and not force:
+        print("[default] Cached results found — skipping.")
+        return pd.read_csv(default_path)
+
+    print("[default] Running default model...")
+    res, prof = run_hmc(
+        data_matrix,
+        covariate_matrix,
+        cell_types,
+        covariate_names,
+        formula,
+        ref_index,
+        default_priors,
+        hmc_params
+    )
+
+    df_default = summarize(res, "default", reference=ref_index)
+    df_default.to_csv(default_path, index=False)
+    return df_default
+
+def run_sweep_for_params(
+    sweep_params,
+    sweep_specs,
+    default_priors,
+    out_dir,
+    data_matrix,
+    covariate_matrix,
+    cell_types,
+    covariate_names,
+    formula,
+    ref_index,
+    hmc_params
+):
+    # -------------------------------------------------------
+    # First load/create default inferred values
+    # -------------------------------------------------------
+    # We re-run *default* once so we have b_raw and tau for default.
+    print("Recomputing default state (summary + braw/tau)...")
+
+    # full default run
+    default_res, _ = run_hmc(
+        data_matrix, covariate_matrix, cell_types, covariate_names,
+        formula, ref_index, default_priors, hmc_params
+    )
+    # summaries
+    df_default = summarize(default_res, "default", reference=ref_index)
+    df_default.to_csv(os.path.join(out_dir, "summary_default.csv"), index=False)
+
+    #  braw/tau values
+    default_braw, default_tau = save_inferred_values(default_res, "default")
+
+    for param in sweep_params:
+
+        if param not in sweep_specs:
+            print(f"WARNING: Unknown parameter '{param}' — skipping.")
+            continue
+
+        lvls = sweep_specs[param]
+        print(f"Sweeping parameter: {param}")
+
         pdir = os.path.join(out_dir, param)
         os.makedirs(pdir, exist_ok=True)
 
-        # low
+        # -------------------------------------------------------
+        # LOW
+        # -------------------------------------------------------
         priors_low = {**default_priors, param: lvls["low"]}
-        model_low = EricaModel(
-            reference_cell_type=ref_index,
-            data_matrix=data_matrix,
-            covariate_matrix=covariate_matrix,
-            cell_types=cell_types,
-            covariate_names=covariate_names,
-            formula=formula,
-            **priors_low
+        res_low, _ = run_hmc(
+            data_matrix, covariate_matrix, cell_types, covariate_names,
+            formula, ref_index, priors_low, hmc_params
         )
-        tracemalloc.start()                      # Start memory tracking
-        start_time = time.perf_counter()         # Start timer
-        res_low = model_low.sample_hmc(**hmc_kwargs)
-        end_time = time.perf_counter()           # End timer
-        current, peak = tracemalloc.get_traced_memory()  # Get memory usage in bytes
-        tracemalloc.stop()
-        elapsed_time = end_time - start_time
-        current_memory = current / 10**6
-        peak_memory = peak / 10**6
-        profiling_dict_low = {
-            "sample_size": data_matrix.shape[0],
-            "parameter_changed": param,
-            "parameter_value": lvls["low"], 
-            "elapsed_time_seconds": elapsed_time,
-            "current_memory_MB": current_memory,
-            "peak_memory_MB": peak_memory
-        }
-        profiling_dict_low_df = pd.DataFrame.from_dict([profiling_dict_low])
+        df_low = summarize(res_low, "low", reference=ref_index)
         low_braw, low_tau = save_inferred_values(res_low, "low")
-        
-        # high
-        priors_high = {**default_priors, param: lvls["high"]}
-        model_high = EricaModel(
-            reference_cell_type=ref_index,
-            data_matrix=data_matrix,
-            covariate_matrix=covariate_matrix,
-            cell_types=cell_types,
-            covariate_names=covariate_names,
-            formula=formula,
-            **priors_high
-        )
-        tracemalloc.start()                      # Start memory tracking
-        start_time = time.perf_counter()         # Start timer
-        res_high = model_high.sample_hmc(**hmc_kwargs)
-        end_time = time.perf_counter()           # End timer
-        current, peak = tracemalloc.get_traced_memory()  # Get memory usage in bytes
-        tracemalloc.stop()
-        elapsed_time = end_time - start_time
-        current_memory = current / 10**6
-        peak_memory = peak / 10**6
-        profiling_dict_high = {
-            "sample_size": data_matrix.shape[0],
-            "parameter_changed": param,
-            "parameter_value": lvls["high"], 
-            "elapsed_time_seconds": elapsed_time,
-            "current_memory_MB": current_memory,
-            "peak_memory_MB": peak_memory
-        }
-        profiling_dict_high_df = pd.DataFrame.from_dict([profiling_dict_high])
-        high_braw, high_tau = save_inferred_values(res_high, "high")
-        
-        # summarize and plot
-        df_all_braw = pd.concat([default_b_raw, low_braw, high_braw], ignore_index=False)
-        df_all_braw.index.name = "covariate"
-        df_all_braw.to_csv(os.path.join(pdir, f"{param}_braw.csv"), index=True)
-        df_all_tau = pd.concat([default_tau, low_tau, high_tau], ignore_index=False)
-        df_all_tau.index.name = "covariate"
-        df_all_tau.to_csv(os.path.join(pdir, f"{param}_tau.csv"), index=True)
 
-        df_low  = summarize(res_low,  prior_label="low",  reference=ref_index)
-        df_high = summarize(res_high, prior_label="high", reference=ref_index)
-        df_all  = pd.concat([df_default, df_low, df_high], ignore_index=True)
-        profiling_dict_all_df = pd.concat([profiling_dict_default_df, profiling_dict_low_df, profiling_dict_high_df], ignore_index=True)
+        # -------------------------------------------------------
+        # HIGH
+        # -------------------------------------------------------
+        priors_high = {**default_priors, param: lvls["high"]}
+        res_high, _ = run_hmc(
+            data_matrix, covariate_matrix, cell_types, covariate_names,
+            formula, ref_index, priors_high, hmc_params
+        )
+        df_high = summarize(res_high, "high", reference=ref_index)
+        high_braw, high_tau = save_inferred_values(res_high, "high")
+
+        # -------------------------------------------------------
+        # MERGE BRAW (WIDE FORMAT)
+        # -------------------------------------------------------
+        all_braw = pd.concat([default_braw, low_braw, high_braw], ignore_index=True)
+        all_braw.to_csv(os.path.join(pdir, f"{param}_braw.csv"), index=False)
+
+        # -------------------------------------------------------
+        # MERGE TAU (WIDE FORMAT)
+        # -------------------------------------------------------
+        all_tau = pd.concat([default_tau, low_tau, high_tau], ignore_index=True)
+        all_tau.to_csv(os.path.join(pdir, f"{param}_tau.csv"), index=False)
+
+        # -------------------------------------------------------
+        # SUMMARY + PLOT
+        # -------------------------------------------------------
+        df_all = pd.concat([df_default, df_low, df_high], ignore_index=True)
         df_all.to_csv(os.path.join(pdir, f"summary_{param}.csv"), index=False)
-        profiling_dict_all_df.to_csv(os.path.join(pdir, f"profiling_{param}.csv"), index=False)
 
         fig, _ = plot_grid(df_all, param_name=param)
-        fig.savefig(os.path.join(pdir, f"{param}.png"), dpi=200, bbox_inches="tight")
-        plt.close(fig)
+        fig.savefig(os.path.join(pdir, f"{param}.png"), dpi=200)
+        plt.close()
 
-    print(f"[{n_tag}] Done. Results in {out_dir}")
+
+def run_one_file(
+    csv_path,
+    out_root,
+    sweep_params=None,   
+    default_priors=None,
+    hmc_params=None,
+    force_default=False
+):
+    sweep_params = sweep_params or []
+    default_priors = default_priors or {
+        "alpha_loc": 0.0,
+        "alpha_sd": 5.0,
+        "sigma_hc_scale": 1.0,
+        "gamma_loc": 0.0,
+        "gamma_sd": 1.0,
+        "tau_temperature": 50.0
+    }
+    hmc_params = hmc_params or dict(
+        num_results=5000,
+        num_burnin=1000,
+        step_size=0.01,
+        num_leapfrog_steps=20
+    )
+
+    data = pd.read_csv(csv_path)
+    if "donor_id" in data.columns:
+        data = data.set_index("donor_id")
+
+    cell_types = [c for c in data.columns if c.startswith("CT")]
+    covariates = [c for c in data.columns if c not in cell_types]
+
+    ref_cell = "CT5"
+    ref_index = cell_types.index(ref_cell)
+
+    data_matrix = data[cell_types].values
+    covariate_matrix = data[covariates].values if covariates else None
+    formula = "~ " + " + ".join(covariates) if covariates else "~ 1"
+
+    # --- output dir ---
+    base = os.path.basename(csv_path).replace(".csv", "")
+    out_dir = os.path.join(out_root, base)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # --- run default (cached) ---
+    df_default = run_default_if_needed(
+        out_dir,
+        data_matrix,
+        covariate_matrix,
+        cell_types,
+        covariate_names=covariates,
+        formula=formula,
+        ref_index=ref_index,
+        default_priors=default_priors,
+        hmc_params=hmc_params,
+        force=force_default
+    )
+
+    sweep_specs = {
+        "alpha_loc":        dict(low=-10.0,  high=10.0),
+        "alpha_sd":         dict(low=0.5,    high=10.0),
+        "sigma_hc_scale":   dict(low=0.25,   high=5.0),
+        "gamma_loc":        dict(low=-10.0,  high=10.0),
+        "gamma_sd":         dict(low=0.25,   high=5.0),
+        "tau_temperature":  dict(low=1.0,    high=100.0)
+    }
+
+    run_sweep_for_params(
+        sweep_params=sweep_params,
+        sweep_specs=sweep_specs,
+        default_priors=default_priors,
+        out_dir=out_dir,
+        data_matrix=data_matrix,
+        covariate_matrix=covariate_matrix,
+        cell_types=cell_types,
+        covariate_names=covariates,
+        formula=formula,
+        ref_index=ref_index,
+        hmc_params=hmc_params
+    )
 
 if __name__ == "__main__":
-    import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", required=True)
     ap.add_argument("--out", default="./results")
+    ap.add_argument("--sweep", nargs="*", default=[])
+    ap.add_argument("--force_default", action="store_true")
     args = ap.parse_args()
 
-    os.makedirs(args.out, exist_ok=True)
     run_one_file(
         csv_path=args.file,
-        out_root=args.out
+        out_root=args.out,
+        sweep_params=args.sweep,
+        force_default=args.force_default
     )
-
-    # parameter_name , Mean, STD,
-    # beta_00
-    # beta_01
-
-# plt.figure(figsize=(10,4))
-# plt.imshow(beta_full, aspect="auto", cmap="bwr", vmin=-1, vmax=1)
-# plt.colorbar(label="Posterior mean effects")
-# plt.xlabel("Dirichlet categories")
-# plt.ylabel("Covariates")
-# plt.title("Posterior mean of beta coefficients (sparse)")
-# plt.show()
-
-# plt.figure(figsize=(10,4))
-# plt.imshow(true_beta, aspect="auto", cmap="bwr", vmin=-1, vmax=1)
-# plt.colorbar(label="True beta")
-# plt.xlabel("Dirichlet categories")
-# plt.ylabel("Covariates")
-# plt.title("True beta coefficients (sparse)")
-# plt.show()
