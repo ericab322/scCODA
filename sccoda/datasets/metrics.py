@@ -85,10 +85,7 @@ def build_full_table(true_beta_csv,
 
 
 def compute_metrics(driver_df,
-                    tau_threshold=0.5):
-    """
-    Compute TP, FP, TN, FN and sign_accuracy from driver_df.
-    """
+                    tau_threshold=0.95):
 
     df = driver_df.copy()
     true_hit = df["true_hit"].values

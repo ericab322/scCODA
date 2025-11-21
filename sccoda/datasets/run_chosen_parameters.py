@@ -277,9 +277,6 @@ def run_sweep_for_params(
     ref_index,
     hmc_params
 ):
-    # -------------------------------------------------------
-    # First load/create default inferred values
-    # -------------------------------------------------------
     # We re-run *default* once so we have b_raw and tau for default.
     print("Recomputing default state (summary + braw/tau)...")
 
@@ -329,21 +326,11 @@ def run_sweep_for_params(
         df_high = summarize(res_high, "high", reference=ref_index)
         high_braw, high_tau = save_inferred_values(res_high, "high")
 
-        # -------------------------------------------------------
-        # MERGE BRAW (WIDE FORMAT)
-        # -------------------------------------------------------
         all_braw = pd.concat([default_braw, low_braw, high_braw], ignore_index=True)
         all_braw.to_csv(os.path.join(pdir, f"{param}_braw.csv"), index=False)
-
-        # -------------------------------------------------------
-        # MERGE TAU (WIDE FORMAT)
-        # -------------------------------------------------------
         all_tau = pd.concat([default_tau, low_tau, high_tau], ignore_index=True)
         all_tau.to_csv(os.path.join(pdir, f"{param}_tau.csv"), index=False)
 
-        # -------------------------------------------------------
-        # SUMMARY + PLOT
-        # -------------------------------------------------------
         df_all = pd.concat([df_default, df_low, df_high], ignore_index=True)
         df_all.to_csv(os.path.join(pdir, f"summary_{param}.csv"), index=False)
 
