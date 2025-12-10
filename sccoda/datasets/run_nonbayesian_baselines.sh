@@ -33,14 +33,49 @@ module load julia;
 module load jags;
 export LD_PRELOAD=/gpfs/runtime/opt/intel/2020.2/mkl/lib/intel64/libmkl_def.so:/gpfs/runtime/opt/intel/2020.2/mkl/lib/intel64/libmkl_avx2.so:/gpfs/runtime/opt/intel/2020.2/mkl/lib/intel64/libmkl_core.so:/gpfs/runtime/opt/intel/2020.2/mkl/lib/intel64/libmkl_intel_lp64.so:/gpfs/runtime/opt/intel/2020.2/mkl/lib/intel64/libmkl_intel_thread.so:/gpfs/runtime/opt/intel/2020.2/lib/intel64_lin/libiomp5.so;
 
+
+PROJECT_ROOT=/users/ebrown62/scCODA/sccoda/datasets
+DATA_DIR=$PROJECT_ROOT
+OUT_BASE=$PROJECT_ROOT/results/covariate_scaling  
+
+mkdir -p "$OUT_BASE"
+
+
 #Activate env
-source /users/ebrown62/scCODA/sccoda-py311/bin/activate; 
-export PYTHONPATH=/users/ebrown62/scCODA:$PYTHONPATH
+source /users/ebrown62/scCODA/sccoda-py311/bin/activate
+export PYTHONPATH=/users/ebrown62/scCODA:${PYTHONPATH}
 
-DATA1="/users/ebrown62/scCODA/sccoda/datasets/scCODA_simulated_N=200_K=5_P=100_SEED=0.csv"
-DATA2="/users/ebrown62/scCODA/sccoda/datasets/scCODA_simulated_N=200_K=5_P=10_SEED=0.csv"
-DATA3="/users/ebrown62/scCODA/sccoda/datasets/scCODA_simulated_N=200_K=5_P=1_SEED=0.csv"
+cd "$DATA_DIR"
 
-python /users/ebrown62/scCODA/sccoda/datasets/hmc_tuner.py "$DATA1" "$DATA2" "$DATA3"
+MODELS=(
+    "Haber"
+    "CLR"
+    "TTest"
+    "CLR_ttest"
+    "ALR_ttest"
+    "ALR_wilcoxon"
+)
 
+cd "$DATA_DIR"
+SAVE_DIR=$PROJECT_ROOT/datasets/results/covariate_scaling
+for FILE in scCODA_simulated_N=200_K=5_P=*"_SEED=0.csv"; do
 
+    if [[ "$FILE" != *true_beta* ]]; then
+        echo "Processing dataset: $FILE"
+        PVAL=$(echo "$FILE" | sed -E 's/.*P=([0-9]+)_SEED.*/\1/')
+        for MODEL in "${MODELS[@]}"; do
+            echo "  Running model: $MODEL"
+            MODEL_DIR="$OUT_BASE/$MODEL"
+            mkdir -p "$MODEL_DIR"
+            P_DIR="$MODEL_DIR/P=${PVAL}"
+            mkdir -p "$P_DIR"
+
+            python $PROJECT_ROOT/non_bayesian_baselines.py \
+                --model "$MODEL" \
+                --file "$FILE" \
+                --out "$P_DIR"
+        done
+
+    fi
+
+done

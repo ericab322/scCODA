@@ -5,6 +5,10 @@ __pycache__/
 
 sccoda/datasets/results/*
 
+.Rprofile
+renv.lock
+renv/*
+
 # C extensions
 *.so
 
